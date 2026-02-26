@@ -1,8 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { useRouter } from "next/navigation";
 
 export default function PaymentPage() {
 
@@ -12,7 +11,7 @@ export default function PaymentPage() {
 
   const [loading, setLoading] = useState(false);
   const [paymentStatus, setPaymentStatus] =
-    useState<"created" | "processing" | "success" | "failure">("created");
+    useState<"idle" | "created" | "processing" | "success" | "failure">("idle");
 
   // ===============================
   // LISTEN PAYMENT STATUS
@@ -36,8 +35,9 @@ export default function PaymentPage() {
             setLoading(false);
           }
 
-          if (status === "failure" || status === "failed") {
-            setPaymentStatus("failed");
+          // ✅ matches your DB enum "failure"
+          if (status === "failure") {
+            setPaymentStatus("failure");
             setLoading(false);
           }
         }
@@ -69,9 +69,6 @@ export default function PaymentPage() {
       return;
     }
 
-    //  DEBUG: check exact value being searched
-    console.log("Looking for account_id:", JSON.stringify(customerId.trim()));
-
     // verify receiver exists by account_id
     const { data: receiver, error: receiverError } = await supabase
       .from("profiles")
@@ -79,13 +76,9 @@ export default function PaymentPage() {
       .eq("account_id", customerId.trim())
       .maybeSingle();
 
-    // DEBUG: check what supabase returned
-    console.log("Receiver result:", receiver);
-    console.log("Receiver error:", receiverError);
-
     if (!receiver) {
-      alert(`Receiver not found. Searched for: "${customerId.trim()}". Check console for details.`);
-      setPaymentStatus("failed");
+      alert(`Receiver not found. Searched for: "${customerId.trim()}"`);
+      setPaymentStatus("idle");
       setLoading(false);
       return;
     }
@@ -103,7 +96,7 @@ export default function PaymentPage() {
 
     if (error) {
       alert(error.message);
-      setPaymentStatus("failed");
+      setPaymentStatus("idle");
       setLoading(false);
       return;
     }
@@ -111,17 +104,24 @@ export default function PaymentPage() {
     listenForStatus(data.id);
   };
 
+  const resetForm = () => {
+    setPaymentStatus("idle");
+    setLoading(false);
+    setAmount("");
+    setCustomerId("");
+  };
+
   // ===============================
   // SUCCESS UI
   // ===============================
   if (paymentStatus === "success") {
     return (
-      <div className="flex h-screen items-center justify-center">
+      <div className="flex h-screen items-center justify-center" style={{ background: "#0a0a0f" }}>
         <div className="text-center">
           <div className="text-green-500 text-6xl">✅</div>
-          <p className="text-xl font-bold mt-4">Payment Successful</p>
+          <p className="text-xl font-bold mt-4 text-white">Payment Successful</p>
           <button
-            onClick={() => { setPaymentStatus("idle"); setLoading(false); setAmount(""); setCustomerId(""); }}
+            onClick={resetForm}
             className="mt-6 px-6 py-2 bg-green-500 text-white rounded-full text-sm"
           >
             Make Another Payment
@@ -136,12 +136,12 @@ export default function PaymentPage() {
   // ===============================
   if (paymentStatus === "failure") {
     return (
-      <div className="flex h-screen items-center justify-center">
+      <div className="flex h-screen items-center justify-center" style={{ background: "#0a0a0f" }}>
         <div className="text-center">
           <div className="text-red-500 text-6xl">❌</div>
-          <p className="text-xl font-bold mt-4">Payment Failed</p>
+          <p className="text-xl font-bold mt-4 text-white">Payment Failed</p>
           <button
-            onClick={() => { setPaymentStatus("idle"); setLoading(false); }}
+            onClick={resetForm}
             className="mt-6 px-6 py-2 bg-red-500 text-white rounded-full text-sm"
           >
             Try Again
@@ -156,16 +156,19 @@ export default function PaymentPage() {
   // ===============================
   if (paymentStatus === "processing") {
     return (
-      <div className="flex h-screen items-center justify-center">
+      <div className="flex h-screen items-center justify-center" style={{ background: "#0a0a0f" }}>
         <div className="text-center space-y-4">
           <div className="animate-spin h-16 w-16 border-4 border-blue-500 border-t-transparent rounded-full mx-auto" />
-          <p className="font-semibold">Processing payment...</p>
+          <p className="font-semibold text-white">Processing payment...</p>
           <p className="text-sm text-gray-400">Please wait, do not close this page</p>
         </div>
       </div>
     );
   }
 
+  // ===============================
+  // PAYMENT FORM
+  // ===============================
   return (
     <>
       <style>{`
@@ -175,41 +178,23 @@ export default function PaymentPage() {
           color: #e4e4f0;
           font-family: 'Syne', sans-serif;
         }
-
         .grid-bg {
-          position: fixed;
-          inset: 0;
-          pointer-events: none;
+          position: fixed; inset: 0; pointer-events: none;
           background-image:
             linear-gradient(rgba(124,58,237,0.04) 1px, transparent 1px),
             linear-gradient(90deg, rgba(124,58,237,0.04) 1px, transparent 1px);
           background-size: 40px 40px;
         }
-
         .orb1 {
-          position: fixed;
-          width: 500px;
-          height: 500px;
-          border-radius: 50%;
-          background: radial-gradient(circle,
-            rgba(124,58,237,0.15),
-            transparent 70%);
-          top: -150px;
-          right: -100px;
+          position: fixed; width: 500px; height: 500px; border-radius: 50%;
+          background: radial-gradient(circle, rgba(124,58,237,0.15), transparent 70%);
+          top: -150px; right: -100px; pointer-events: none;
         }
-
         .orb2 {
-          position: fixed;
-          width: 400px;
-          height: 400px;
-          border-radius: 50%;
-          background: radial-gradient(circle,
-            rgba(6,182,212,0.12),
-            transparent 70%);
-          bottom: -120px;
-          left: -80px;
+          position: fixed; width: 400px; height: 400px; border-radius: 50%;
+          background: radial-gradient(circle, rgba(6,182,212,0.12), transparent 70%);
+          bottom: -120px; left: -80px; pointer-events: none;
         }
-
         .pay-card {
           background: rgba(255,255,255,0.03);
           border: 1px solid rgba(255,255,255,0.08);
@@ -218,42 +203,26 @@ export default function PaymentPage() {
           padding: 40px;
           width: 380px;
         }
-
         .input {
-          width: 100%;
-          padding: 14px;
-          border-radius: 10px;
+          width: 100%; padding: 14px; border-radius: 10px;
           border: 1px solid rgba(255,255,255,0.1);
           background: rgba(255,255,255,0.04);
-          color: white;
-          outline: none;
-          transition: 0.25s;
+          color: white; outline: none; transition: 0.25s;
+          box-sizing: border-box;
         }
-
-        .input:focus {
-          border-color: rgba(124,58,237,0.6);
-        }
-
+        .input:focus { border-color: rgba(124,58,237,0.6); }
+        .input option { background: #18181b; color: white; }
         .pay-btn {
-          width: 100%;
-          padding: 14px;
-          border-radius: 999px;
-          border: none;
-          font-weight: 700;
-          cursor: pointer;
-          background: linear-gradient(
-            135deg,
-            #7c3aed,
-            #06b6d4
-          );
-          color: white;
-          transition: 0.25s;
+          width: 100%; padding: 14px; border-radius: 999px; border: none;
+          font-weight: 700; cursor: pointer; font-size: 15px;
+          background: linear-gradient(135deg, #7c3aed, #06b6d4);
+          color: white; transition: 0.25s;
         }
-
-        .pay-btn:hover {
+        .pay-btn:hover:not(:disabled) {
           transform: translateY(-2px);
           box-shadow: 0 10px 30px rgba(124,58,237,0.4);
         }
+        .pay-btn:disabled { opacity: 0.5; cursor: not-allowed; }
       `}</style>
 
       <div className="grid-bg" />
@@ -261,17 +230,14 @@ export default function PaymentPage() {
       <div className="orb2" />
 
       <div className="flex h-screen items-center justify-center">
-
         <div className="pay-card space-y-6">
 
-          <h2 className="text-xl font-bold text-center">
-            Make Payment
-          </h2>
+          <h2 className="text-xl font-bold text-center">Make Payment</h2>
 
           <select
             className="input"
             value={currency}
-            onChange={(e)=>setCurrency(e.target.value)}
+            onChange={(e) => setCurrency(e.target.value)}
           >
             <option>INR</option>
             <option>USD</option>
@@ -281,14 +247,16 @@ export default function PaymentPage() {
           <input
             placeholder="Receiver Account ID"
             className="input"
-            onChange={(e)=>setCustomerId(e.target.value)}
+            value={customerId}
+            onChange={(e) => setCustomerId(e.target.value)}
           />
 
           <input
             type="number"
             placeholder="Amount"
             className="input"
-            onChange={(e)=>setAmount(e.target.value)}
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
           />
 
           <button
@@ -300,7 +268,6 @@ export default function PaymentPage() {
           </button>
 
         </div>
-
       </div>
     </>
   );
