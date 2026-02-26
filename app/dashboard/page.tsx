@@ -46,25 +46,50 @@ export default function Dashboard() {
 
   // ── Auth + load ──────────────────────────────────────────────────────────
   useEffect(() => {
-    const load = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { router.replace("/signin"); return; }
+    let userId: string | null = null;
 
+    const fetchData = async (uid: string) => {
       const [{ data: prof }, { data: pays }] = await Promise.all([
-        supabase.from("profiles").select("*").eq("id", user.id).single(),
+        supabase.from("profiles").select("*").eq("id", uid).single(),
         supabase
           .from("payments")
           .select("*")
-          .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
+          .or(`sender_id.eq.${uid},receiver_id.eq.${uid}`)
           .order("created_at", { ascending: false })
           .limit(50),
       ]);
-
       setProfile(prof);
       setPayments(pays ?? []);
       setLoading(false);
     };
-    load();
+
+    const init = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { router.replace("/signin"); return; }
+      userId = user.id;
+      await fetchData(user.id);
+    };
+
+    init();
+
+    // Re-fetch when tab regains focus
+    const onFocus = () => { if (userId) fetchData(userId); };
+    window.addEventListener("focus", onFocus);
+
+    // Real-time: listen for any insert/update on payments
+    const channel = supabase
+      .channel("payments-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "payments" },
+        () => { if (userId) fetchData(userId); }
+      )
+      .subscribe();
+
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      supabase.removeChannel(channel);
+    };
   }, [router]);
 
   // ── Stats ────────────────────────────────────────────────────────────────
