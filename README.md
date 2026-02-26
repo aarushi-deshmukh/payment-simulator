@@ -1,4 +1,4 @@
-# 💳 Mini Payment Gateway Simulator
+# 💳 Payment Gateway Simulator
 
 A full-stack payment gateway simulation built using **Next.js** and **Supabase (PostgreSQL)**.
 
@@ -6,7 +6,7 @@ This system models real-world payment workflows using a state-driven architectur
 
 ---
 
-## 🚀 Objective
+##  Objective
 
 Build a system that:
 
@@ -17,7 +17,7 @@ Build a system that:
 
 ---
 
-# 🏗️ Tech Stack
+#  Tech Stack
 
 - **Frontend + API**: Next.js  
 - **Database**: Supabase (PostgreSQL)  
@@ -26,7 +26,7 @@ Build a system that:
 
 ---
 
-# 🧠 System Architecture
+#  System Architecture
 
 Next.js (Frontend + API Routes)  
         ↓  
@@ -34,7 +34,7 @@ Supabase (PostgreSQL Database)
 
 ---
 
-# 📊 Database Design
+#  Database Design
 
 ### Tables
 
