@@ -90,33 +90,23 @@ export default function Dashboard() {
     setLoading(false);
   };
 
-  useEffect(() => {
-    let userId: string | null = null;
+  load();
 
-    const init = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { router.replace("/signin"); return; }
-      userId = user.id;
-      await fetchData(user.id);
-    };
+}, [router]);
 
-    init();
+useEffect(() => {
 
-    const onFocus = () => { if (userId) fetchData(userId); };
-    window.addEventListener("focus", onFocus);
+    if (!profile) return;
 
-    const channel = supabase
-      .channel("dashboard-payments")
-      .on("postgres_changes", { event: "*", schema: "public", table: "payments" },
-        () => { if (userId) fetchData(userId); }
-      )
-      .subscribe();
+    fetchPayments(profile.id);
 
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      supabase.removeChannel(channel);
-    };
-  }, [router]);
+  }, [activeTab, profile]);
+
+  const filtered = payments.filter((p) =>
+    statusFilter === "all"
+      ? true
+      : p.status === statusFilter
+  );
 
   const stats = {
     total:      payments.length,
@@ -124,21 +114,19 @@ export default function Dashboard() {
     failed:     payments.filter(p => p.status === "FAILURE").length,
     processing: payments.filter(p => p.status === "PROCESSING" || p.status === "CREATED").length,
     totalSent: payments
-      .filter(p => p.sender_id === profile?.id && p.status === "SUCCESS")
-      .reduce((a, p) => a + Number(p.amount), 0),
+      .filter((p) => p.sender_id === profile?.id && p.status === "success")
+      .reduce((a, p) => a + p.amount, 0),
     totalReceived: payments
-      .filter(p => p.receiver_id === profile?.id && p.status === "SUCCESS")
-      .reduce((a, p) => a + Number(p.amount), 0),
+      .filter((p) => p.receiver_id === profile?.id && p.status === "success")
+      .reduce((a, p) => a + p.amount, 0),
   };
 
-  const filtered = payments.filter(p => {
-    const dirMatch =
-      activeTab === "sent"     ? p.sender_id   === profile?.id :
-      activeTab === "received" ? p.receiver_id === profile?.id : true;
-    const statusMatch = statusFilter === "all" ? true : p.status === statusFilter;
-    return dirMatch && statusMatch;
-  });
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    router.replace("/signin");
+  };
 
+  // ── Loading state ────────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="min-h-screen bg-[#080810] flex items-center justify-center flex-col gap-4">
@@ -221,6 +209,47 @@ export default function Dashboard() {
         .main > *:nth-child(1) { animation-delay: 0.05s; }
         .main > *:nth-child(2) { animation-delay: 0.10s; }
         .main > *:nth-child(3) { animation-delay: 0.15s; }
+        .tx-slider {
+          position: relative;
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          background: rgba(255,255,255,0.04);
+          border-radius: 14px;
+          padding: 6px;
+          margin-bottom: 20px;
+          overflow: hidden;
+        }
+
+        .tx-slide-btn {
+          position: relative;
+          z-index: 2;
+          border: none;
+          background: transparent;
+          color: #71717a;
+          font-weight: 700;
+          padding: 10px 0;
+          cursor: pointer;
+          transition: color 0.25s ease;
+        }
+
+        .tx-slide-btn.active {
+          color: white;
+        }
+
+        .slider-indicator {
+          position: absolute;
+          top: 6px;
+          left: 6px;
+          width: calc(33.333% - 8px);
+          height: calc(100% - 12px);
+          background: linear-gradient(
+            135deg,
+            rgba(124,58,237,0.4),
+            rgba(6,182,212,0.3)
+          );
+          border-radius: 10px;
+          transition: transform 0.35s cubic-bezier(.4,0,.2,1);
+        }
       `}</style>
 
       <div className="dash">
@@ -252,14 +281,52 @@ export default function Dashboard() {
             </div>
           </div>
 
+          {/* Transaction Filter Slider */}
+          <div className="content">
+            <div className="tx-slider">
+              {(["all", "sent", "received"] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setActiveTab(t)}
+                  className={`tx-slide-btn ${
+                    activeTab === t ? "active" : ""
+                  }`}
+                >
+                  {t.toUpperCase()}
+                </button>
+              ))}
+              <div
+                className="slider-indicator"
+                style={{
+                  transform:
+                    activeTab === "all"
+                      ? "translateX(0%)"
+                      : activeTab === "sent"
+                      ? "translateX(100%)"
+                      : "translateX(200%)",
+                }}
+              />
+            </div>
+          </div>
+
           {/* Stats */}
           <div className="stats-row">
-            <div className="stat-card"><p className="stat-label">Total Transactions</p><p className="stat-value violet">{stats.total}</p></div>
-            <div className="stat-card"><p className="stat-label">Successful</p><p className="stat-value green">{stats.success}</p></div>
-            <div className="stat-card"><p className="stat-label">In Progress</p><p className="stat-value amber">{stats.processing}</p></div>
-            <div className="stat-card"><p className="stat-label">Failed</p><p className="stat-value red">{stats.failed}</p></div>
-            <div className="stat-card"><p className="stat-label">Total Sent</p><p className="stat-value red small">{fmt(stats.totalSent, profile?.currency ?? "INR")}</p></div>
-            <div className="stat-card"><p className="stat-label">Total Received</p><p className="stat-value cyan small">{fmt(stats.totalReceived, profile?.currency ?? "INR")}</p></div>
+            <div className="stat-card">
+              <p className="stat-label">Total Transactions</p>
+              <p className="stat-value violet">{stats.total}</p>
+            </div>
+            <div className="stat-card">
+              <p className="stat-label">Completed</p>
+              <p className="stat-value green">{stats.completed}</p>
+            </div>
+            <div className="stat-card">
+              <p className="stat-label">Pending</p>
+              <p className="stat-value amber">{stats.pending}</p>
+            </div>
+            <div className="stat-card">
+              <p className="stat-label">Failed</p>
+              <p className="stat-value red">{stats.failed}</p>
+            </div>
           </div>
 
           {/* Table */}
@@ -267,13 +334,6 @@ export default function Dashboard() {
             <div className="panel-header-wrap">
               <div className="panel-header-left">
                 <span className="panel-title">Transaction History</span>
-                <div className="tabs">
-                  {(["all", "sent", "received"] as const).map(t => (
-                    <button key={t} className={`tab ${activeTab === t ? "active" : ""}`} onClick={() => setActiveTab(t)}>
-                      {t[0].toUpperCase() + t.slice(1)}
-                    </button>
-                  ))}
-                </div>
               </div>
               <select className="filter-select" value={statusFilter} onChange={e => setStatusFilter(e.target.value as typeof statusFilter)}>
                 <option value="all">All Statuses</option>
