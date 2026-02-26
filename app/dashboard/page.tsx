@@ -19,7 +19,7 @@ type Payment = {
   sender_id: string;
   receiver_id: string;
   amount: number;
-  status: "pending" | "completed" | "failed";
+  status: "created" | "processing" | "success" | "failure";
   created_at: string;
 };
 
@@ -42,53 +42,97 @@ export default function Dashboard() {
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"all" | "sent" | "received">("all");
-  const [statusFilter, setStatusFilter] = useState<"all" | "completed" | "failed">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "processing" | "success" | "failure">("all");
+
+  const fetchPayments = async (userId: string) => {
+
+    let query = supabase
+      .from("payments")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    // ALL TAB
+    if (activeTab === "all") {
+      query = query.or(
+        `sender_id.eq.${userId},receiver_id.eq.${userId}`
+      );
+    }
+
+    // SENT TAB
+    if (activeTab === "sent") {
+      query = query.eq("sender_id", userId);
+    }
+
+    // RECEIVED TAB
+    if (activeTab === "received") {
+      query = query.eq("receiver_id", userId);
+    }
+
+    const { data, error } = await query;
+
+    if (!error) setPayments(data ?? []);
+  };
 
   // ── Auth + load ──────────────────────────────────────────────────────────
   useEffect(() => {
-    const load = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { router.replace("/signin"); return; }
 
-      const [{ data: prof }, { data: pays }] = await Promise.all([
-        supabase.from("profiles").select("*").eq("id", user.id).single(),
-        supabase
-          .from("payments")
-          .select("*")
-          .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
-          .order("created_at", { ascending: false })
-          .limit(50),
-      ]);
+  const load = async () => {
 
-      setProfile(prof);
-      setPayments(pays ?? []);
-      setLoading(false);
-    };
-    load();
-  }, [router]);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      router.replace("/signin");
+      return;
+    }
+
+    const { data: prof } =
+      await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", user.id)
+        .single();
+
+    setProfile(prof);
+
+    await fetchPayments(user.id);
+
+    setLoading(false);
+  };
+
+  load();
+
+}, [router]);
+
+useEffect(() => {
+
+    if (!profile) return;
+
+    fetchPayments(profile.id);
+
+  }, [activeTab, profile]);
+
+  const filtered = payments.filter((p) =>
+    statusFilter === "all"
+      ? true
+      : p.status === statusFilter
+  );
 
   // ── Stats ────────────────────────────────────────────────────────────────
   const stats = {
     total: payments.length,
-    completed: payments.filter((p) => p.status === "completed").length,
-    pending: payments.filter((p) => p.status === "pending").length,
-    failed: payments.filter((p) => p.status === "failed").length,
+    completed: payments.filter((p) => p.status === "success").length,
+    pending: payments.filter((p) => p.status === "processing").length,
+    failed: payments.filter((p) => p.status === "failure").length,
     totalSent: payments
-      .filter((p) => p.sender_id === profile?.id && p.status === "completed")
+      .filter((p) => p.sender_id === profile?.id && p.status === "success")
       .reduce((a, p) => a + p.amount, 0),
     totalReceived: payments
-      .filter((p) => p.receiver_id === profile?.id && p.status === "completed")
+      .filter((p) => p.receiver_id === profile?.id && p.status === "success")
       .reduce((a, p) => a + p.amount, 0),
   };
-
-  // ── Filtered payments ────────────────────────────────────────────────────
-  const filtered = payments.filter((p) => {
-    const dirMatch =
-      activeTab === "sent" ? p.sender_id === profile?.id :
-      activeTab === "received" ? p.receiver_id === profile?.id : true;
-    const statusMatch = statusFilter === "all" ? true : p.status === statusFilter;
-    return dirMatch && statusMatch;
-  });
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -254,6 +298,47 @@ export default function Dashboard() {
         .main > *:nth-child(1) { animation-delay: 0.05s; }
         .main > *:nth-child(2) { animation-delay: 0.10s; }
         .main > *:nth-child(3) { animation-delay: 0.15s; }
+        .tx-slider {
+          position: relative;
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          background: rgba(255,255,255,0.04);
+          border-radius: 14px;
+          padding: 6px;
+          margin-bottom: 20px;
+          overflow: hidden;
+        }
+
+        .tx-slide-btn {
+          position: relative;
+          z-index: 2;
+          border: none;
+          background: transparent;
+          color: #71717a;
+          font-weight: 700;
+          padding: 10px 0;
+          cursor: pointer;
+          transition: color 0.25s ease;
+        }
+
+        .tx-slide-btn.active {
+          color: white;
+        }
+
+        .slider-indicator {
+          position: absolute;
+          top: 6px;
+          left: 6px;
+          width: calc(33.333% - 8px);
+          height: calc(100% - 12px);
+          background: linear-gradient(
+            135deg,
+            rgba(124,58,237,0.4),
+            rgba(6,182,212,0.3)
+          );
+          border-radius: 10px;
+          transition: transform 0.35s cubic-bezier(.4,0,.2,1);
+        }
       `}</style>
 
       <div className="dash">
@@ -288,6 +373,34 @@ export default function Dashboard() {
             </div>
           </div>
 
+          {/* Transaction Filter Slider */}
+          <div className="content">
+            <div className="tx-slider">
+              {(["all", "sent", "received"] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setActiveTab(t)}
+                  className={`tx-slide-btn ${
+                    activeTab === t ? "active" : ""
+                  }`}
+                >
+                  {t.toUpperCase()}
+                </button>
+              ))}
+              <div
+                className="slider-indicator"
+                style={{
+                  transform:
+                    activeTab === "all"
+                      ? "translateX(0%)"
+                      : activeTab === "sent"
+                      ? "translateX(100%)"
+                      : "translateX(200%)",
+                }}
+              />
+            </div>
+          </div>
+
           {/* Stats */}
           <div className="stats-row">
             <div className="stat-card">
@@ -306,14 +419,6 @@ export default function Dashboard() {
               <p className="stat-label">Failed</p>
               <p className="stat-value red">{stats.failed}</p>
             </div>
-            <div className="stat-card">
-              <p className="stat-label">Total Sent</p>
-              <p className="stat-value red">{fmt(stats.totalSent, profile?.currency)}</p>
-            </div>
-            <div className="stat-card">
-              <p className="stat-label">Total Received</p>
-              <p className="stat-value cyan">{fmt(stats.totalReceived, profile?.currency)}</p>
-            </div>
           </div>
 
           {/* Transaction history — full width */}
@@ -321,27 +426,25 @@ export default function Dashboard() {
             <div className="panel-header-wrap">
               <div className="panel-header-top">
                 <span className="panel-title">Transaction History</span>
-                <div className="tabs">
-                  {(["all", "sent", "received"] as const).map((t) => (
-                    <button
-                      key={t}
-                      className={`tab ${activeTab === t ? "active" : ""}`}
-                      onClick={() => setActiveTab(t)}
-                    >
-                      {t.charAt(0).toUpperCase() + t.slice(1)}
-                    </button>
-                  ))}
-                </div>
               </div>
               <select
-                className="filter-select"
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value as "all" | "completed" | "failed")}
-              >
-                <option value="all">All Statuses</option>
-                <option value="completed">✓ Successful</option>
-                <option value="failed">✕ Failed</option>
-              </select>
+              className="filter-select"
+              value={statusFilter}
+              onChange={(e) =>
+                setStatusFilter(
+                  e.target.value as
+                    | "all"
+                    | "processing"
+                    | "success"
+                    | "failure"
+                )
+              }
+            >
+              <option value="all">All Statuses</option>
+              <option value="processing">⏳ Processing</option>
+              <option value="success">✓ Successful</option>
+              <option value="failure">✕ Failed</option>
+            </select>
             </div>
             <div className="table-wrap">
               {filtered.length === 0 ? (
@@ -393,3 +496,4 @@ export default function Dashboard() {
     </>
   );
 }
+
