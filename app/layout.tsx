@@ -1,25 +1,21 @@
-"use client";
-
 import "./globals.css";
 import Header from "@/components/Header";
-import { usePathname } from "next/navigation";
+
+export const metadata = {
+  title: "Payment Simulator",
+  description: "Payment Simulator App",
+};
 
 export default function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const pathname = usePathname();
-
-  const hideHeader =
-    pathname === "/signin" ||
-    pathname === "/signup";
-
   return (
     <html lang="en">
-      <body className="bg-white text-black">
-        {!hideHeader && <Header />}
-        <main>{children}</main>
+      <body>
+        <Header />
+        {children}
       </body>
     </html>
   );
