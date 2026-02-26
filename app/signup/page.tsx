@@ -10,9 +10,14 @@ export default function SignUp() {
 
   const [email,setEmail]=useState("");
   const [password,setPassword]=useState("");
+  const [fullName,setFullName]=useState("");
+  const [accountId,setAccountId]=useState("");
+  const [balance,setBalance]=useState("");
+  const [currency,setCurrency]=useState("");
 
   const handleSignup = async () => {
 
+  // create auth user
     const { data, error } =
       await supabase.auth.signUp({
         email,
@@ -24,9 +29,45 @@ export default function SignUp() {
       return;
     }
 
-    alert("User created ✅");
+    // login immediately
+    const { error: loginError } =
+      await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-    // ✅ go to dashboard
+    if (loginError) {
+      alert(loginError.message);
+      return;
+    }
+
+    // get logged user
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      alert("User session missing");
+      return;
+    }
+
+    // insert profile
+    const { error: profileError } =
+      await supabase
+        .from("profiles")
+        .insert({
+          id: user.id,
+          full_name: fullName,
+          account_id: accountId,
+          balance: Number(balance),
+          currency: currency,
+        });
+
+    if (profileError) {
+      alert(profileError.message);
+      return;
+    }
+
     router.replace("/dashboard");
   };
 
@@ -38,7 +79,30 @@ export default function SignUp() {
         <h1 className="text-2xl font-bold text-center">
           Sign Up
         </h1>
+        <input
+          placeholder="Full Name"
+          className="w-full border p-3 rounded-md"
+          onChange={(e)=>setFullName(e.target.value)}
+        />
 
+        <input
+          placeholder="Account ID"
+          className="w-full border p-3 rounded-md"
+          onChange={(e)=>setAccountId(e.target.value)}
+        />
+
+        <input
+          type="number"
+          placeholder="Balance"
+          className="w-full border p-3 rounded-md"
+          onChange={(e)=>setBalance(e.target.value)}
+        />
+
+        <input
+          placeholder="Currency"
+          className="w-full border p-3 rounded-md"
+          onChange={(e)=>setCurrency(e.target.value)}
+        />
         <input
           type="email"
           placeholder="Email"
