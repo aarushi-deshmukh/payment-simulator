@@ -21,6 +21,8 @@ type Payment = {
   status: "CREATED" | "PROCESSING" | "SUCCESS" | "FAILURE";
   failure_reason: string | null;
   created_at: string;
+  sender_name?: string;
+  receiver_name?: string;
 };
 
 const fmt = (n: number, currency = "INR") => {
@@ -71,42 +73,97 @@ export default function Dashboard() {
   };
 
   const fetchData = async (uid: string) => {
-    const [{ data: prof }, { data: pays }] = await Promise.all([
-      supabase.from("profiles").select("*").eq("id", uid).single(),
-      supabase
-        .from("payments")
-        .select("id, sender_id, receiver_id, amount, status, failure_reason, created_at")
-        .or(`sender_id.eq.${uid},receiver_id.eq.${uid}`)
-        .order("created_at", { ascending: false })
-        .limit(50),
-    ]);
-    if (prof) setProfile(prof);
+    // First get the profile to get account_id
+    const { data: prof } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", uid)
+      .single();
+
+    if (!prof) { setLoading(false); return; }
+    setProfile(prof);
+
+    const accountId = prof.account_id; // ✅ text account_id for receiver_id matching
+
+    // ✅ FIX: sender_id is UUID, receiver_id is text account_id
+    const { data: pays } = await supabase
+      .from("payments")
+      .select("id, sender_id, receiver_id, amount, status, failure_reason, created_at")
+      .or(`sender_id.eq.${uid},receiver_id.eq.${accountId}`)
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (!pays || pays.length === 0) {
+      setPayments([]);
+      setLoading(false);
+      return;
+    }
+
+    // Collect all unique sender UUIDs and receiver account_ids
+    const senderIds   = [...new Set(pays.map(p => p.sender_id).filter(Boolean))];
+    const receiverIds = [...new Set(pays.map(p => p.receiver_id).filter(Boolean))];
+
+    // Fetch sender profiles by UUID
+    const { data: senderProfiles } = await supabase
+      .from("profiles")
+      .select("id, full_name, account_id")
+      .in("id", senderIds);
+
+    // Fetch receiver profiles by account_id (text FK)
+    const { data: receiverProfiles } = await supabase
+      .from("profiles")
+      .select("id, full_name, account_id")
+      .in("account_id", receiverIds);
+
+    // Build lookup maps
+    const senderMap: Record<string, string> = {};
+    (senderProfiles ?? []).forEach(p => { senderMap[p.id] = p.full_name; });
+
+    const receiverMap: Record<string, string> = {};
+    (receiverProfiles ?? []).forEach(p => { receiverMap[p.account_id] = p.full_name; });
+
     setPayments(
-      (pays ?? []).map(p => ({
+      pays.map(p => ({
         ...p,
         status: normalizeStatus(String(p.status)),
+        sender_name:   senderMap[p.sender_id]    ?? "Unknown",
+        receiver_name: receiverMap[p.receiver_id] ?? "Unknown",
       }))
     );
+
     setLoading(false);
   };
 
-  load();
+  useEffect(() => {
+    let userId: string | null = null;
 
-}, [router]);
+    const init = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { router.replace("/signin"); return; }
+      userId = user.id;
+      await fetchData(user.id);
+    };
 
-useEffect(() => {
+    init();
 
-    if (!profile) return;
+    const onFocus = () => { if (userId) fetchData(userId); };
+    window.addEventListener("focus", onFocus);
 
-    fetchPayments(profile.id);
+    const channel = supabase
+      .channel("dashboard-payments")
+      .on("postgres_changes", { event: "*", schema: "public", table: "payments" },
+        () => { if (userId) fetchData(userId); }
+      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "profiles" },
+        () => { if (userId) fetchData(userId); }
+      )
+      .subscribe();
 
-  }, [activeTab, profile]);
-
-  const filtered = payments.filter((p) =>
-    statusFilter === "all"
-      ? true
-      : p.status === statusFilter
-  );
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      supabase.removeChannel(channel);
+    };
+  }, [router]);
 
   const stats = {
     total:      payments.length,
@@ -114,19 +171,21 @@ useEffect(() => {
     failed:     payments.filter(p => p.status === "FAILURE").length,
     processing: payments.filter(p => p.status === "PROCESSING" || p.status === "CREATED").length,
     totalSent: payments
-      .filter((p) => p.sender_id === profile?.id && p.status === "success")
-      .reduce((a, p) => a + p.amount, 0),
+      .filter(p => p.sender_id === profile?.id && p.status === "SUCCESS")
+      .reduce((a, p) => a + Number(p.amount), 0),
     totalReceived: payments
-      .filter((p) => p.receiver_id === profile?.id && p.status === "success")
-      .reduce((a, p) => a + p.amount, 0),
+      .filter(p => p.receiver_id === profile?.account_id && p.status === "SUCCESS")
+      .reduce((a, p) => a + Number(p.amount), 0),
   };
 
-  const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    router.replace("/signin");
-  };
+  const filtered = payments.filter(p => {
+    const dirMatch =
+      activeTab === "sent"     ? p.sender_id   === profile?.id :
+      activeTab === "received" ? p.receiver_id === profile?.account_id : true;
+    const statusMatch = statusFilter === "all" ? true : p.status === statusFilter;
+    return dirMatch && statusMatch;
+  });
 
-  // ── Loading state ────────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="min-h-screen bg-[#080810] flex items-center justify-center flex-col gap-4">
@@ -203,53 +262,15 @@ useEffect(() => {
         .badge { display: inline-flex; align-items: center; font-size: 10px; font-weight: 700; padding: 3px 10px; border-radius: 20px; text-transform: uppercase; letter-spacing: 0.5px; border: 1px solid; }
         .empty { text-align: center; padding: 64px; color: #3f3f46; font-size: 14px; }
         .failure-text { font-size: 11px; color: #f87171; font-family: 'JetBrains Mono', monospace; max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .counterparty { display: flex; flex-direction: column; gap: 2px; }
+        .counterparty-label { font-size: 10px; color: #3f3f46; text-transform: uppercase; letter-spacing: 1px; }
+        .counterparty-name { font-size: 13px; font-weight: 600; color: #e2e2f0; }
 
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
         .main > * { animation: fadeIn 0.4s ease both; }
         .main > *:nth-child(1) { animation-delay: 0.05s; }
         .main > *:nth-child(2) { animation-delay: 0.10s; }
         .main > *:nth-child(3) { animation-delay: 0.15s; }
-        .tx-slider {
-          position: relative;
-          display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          background: rgba(255,255,255,0.04);
-          border-radius: 14px;
-          padding: 6px;
-          margin-bottom: 20px;
-          overflow: hidden;
-        }
-
-        .tx-slide-btn {
-          position: relative;
-          z-index: 2;
-          border: none;
-          background: transparent;
-          color: #71717a;
-          font-weight: 700;
-          padding: 10px 0;
-          cursor: pointer;
-          transition: color 0.25s ease;
-        }
-
-        .tx-slide-btn.active {
-          color: white;
-        }
-
-        .slider-indicator {
-          position: absolute;
-          top: 6px;
-          left: 6px;
-          width: calc(33.333% - 8px);
-          height: calc(100% - 12px);
-          background: linear-gradient(
-            135deg,
-            rgba(124,58,237,0.4),
-            rgba(6,182,212,0.3)
-          );
-          border-radius: 10px;
-          transition: transform 0.35s cubic-bezier(.4,0,.2,1);
-        }
       `}</style>
 
       <div className="dash">
@@ -281,52 +302,14 @@ useEffect(() => {
             </div>
           </div>
 
-          {/* Transaction Filter Slider */}
-          <div className="content">
-            <div className="tx-slider">
-              {(["all", "sent", "received"] as const).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setActiveTab(t)}
-                  className={`tx-slide-btn ${
-                    activeTab === t ? "active" : ""
-                  }`}
-                >
-                  {t.toUpperCase()}
-                </button>
-              ))}
-              <div
-                className="slider-indicator"
-                style={{
-                  transform:
-                    activeTab === "all"
-                      ? "translateX(0%)"
-                      : activeTab === "sent"
-                      ? "translateX(100%)"
-                      : "translateX(200%)",
-                }}
-              />
-            </div>
-          </div>
-
           {/* Stats */}
           <div className="stats-row">
-            <div className="stat-card">
-              <p className="stat-label">Total Transactions</p>
-              <p className="stat-value violet">{stats.total}</p>
-            </div>
-            <div className="stat-card">
-              <p className="stat-label">Completed</p>
-              <p className="stat-value green">{stats.completed}</p>
-            </div>
-            <div className="stat-card">
-              <p className="stat-label">Pending</p>
-              <p className="stat-value amber">{stats.pending}</p>
-            </div>
-            <div className="stat-card">
-              <p className="stat-label">Failed</p>
-              <p className="stat-value red">{stats.failed}</p>
-            </div>
+            <div className="stat-card"><p className="stat-label">Total Transactions</p><p className="stat-value violet">{stats.total}</p></div>
+            <div className="stat-card"><p className="stat-label">Successful</p><p className="stat-value green">{stats.success}</p></div>
+            <div className="stat-card"><p className="stat-label">In Progress</p><p className="stat-value amber">{stats.processing}</p></div>
+            <div className="stat-card"><p className="stat-label">Failed</p><p className="stat-value red">{stats.failed}</p></div>
+            <div className="stat-card"><p className="stat-label">Total Sent</p><p className="stat-value red small">{fmt(stats.totalSent, profile?.currency ?? "INR")}</p></div>
+            <div className="stat-card"><p className="stat-label">Total Received</p><p className="stat-value cyan small">{fmt(stats.totalReceived, profile?.currency ?? "INR")}</p></div>
           </div>
 
           {/* Table */}
@@ -334,6 +317,13 @@ useEffect(() => {
             <div className="panel-header-wrap">
               <div className="panel-header-left">
                 <span className="panel-title">Transaction History</span>
+                <div className="tabs">
+                  {(["all", "sent", "received"] as const).map(t => (
+                    <button key={t} className={`tab ${activeTab === t ? "active" : ""}`} onClick={() => setActiveTab(t)}>
+                      {t[0].toUpperCase() + t.slice(1)}
+                    </button>
+                  ))}
+                </div>
               </div>
               <select className="filter-select" value={statusFilter} onChange={e => setStatusFilter(e.target.value as typeof statusFilter)}>
                 <option value="all">All Statuses</option>
@@ -349,12 +339,14 @@ useEffect(() => {
               ) : (
                 <table className="tx-table">
                   <thead>
-                    <tr><th>TXN ID</th><th>Direction</th><th>Amount</th><th>Status</th><th>Failure Reason</th><th>Time</th></tr>
+                    <tr><th>TXN ID</th><th>Direction</th><th>Counterparty</th><th>Amount</th><th>Status</th><th>Failure Reason</th><th>Time</th></tr>
                   </thead>
                   <tbody>
                     {filtered.map(p => {
                       const isSent = p.sender_id === profile?.id;
                       const b = BADGE[p.status] ?? BADGE.CREATED;
+                      const counterpartyLabel = isSent ? "To" : "From";
+                      const counterpartyName  = isSent ? p.receiver_name : p.sender_name;
                       return (
                         <tr key={p.id} className="tx-row">
                           <td>
@@ -362,9 +354,27 @@ useEffect(() => {
                               {p.id.slice(0, 8)}… <span style={{ fontSize: 10 }}>{copiedId === p.id ? "✓" : "⎘"}</span>
                             </span>
                           </td>
-                          <td><span style={{ fontSize: 12, color: isSent ? "#f87171" : "#34d399", fontWeight: 600 }}>{isSent ? "↑ Sent" : "↓ Received"}</span></td>
-                          <td><span className={isSent ? "tx-amount-neg" : "tx-amount-pos"}>{isSent ? "−" : "+"}{fmt(Number(p.amount), profile?.currency ?? "INR")}</span></td>
-                          <td><span className="badge" style={{ background: b.bg, color: b.color, borderColor: b.border }}>{p.status}</span></td>
+                          <td>
+                            <span style={{ fontSize: 12, color: isSent ? "#f87171" : "#34d399", fontWeight: 600 }}>
+                              {isSent ? "↑ Sent" : "↓ Received"}
+                            </span>
+                          </td>
+                          <td>
+                            <div className="counterparty">
+                              <span className="counterparty-label">{counterpartyLabel}</span>
+                              <span className="counterparty-name">{counterpartyName ?? "—"}</span>
+                            </div>
+                          </td>
+                          <td>
+                            <span className={isSent ? "tx-amount-neg" : "tx-amount-pos"}>
+                              {isSent ? "−" : "+"}{fmt(Number(p.amount), profile?.currency ?? "INR")}
+                            </span>
+                          </td>
+                          <td>
+                            <span className="badge" style={{ background: b.bg, color: b.color, borderColor: b.border }}>
+                              {p.status}
+                            </span>
+                          </td>
                           <td>
                             {p.failure_reason
                               ? <span className="failure-text" title={p.failure_reason}>{p.failure_reason}</span>
