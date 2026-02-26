@@ -1,4 +1,51 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
+
 export default function Dashboard() {
+
+  const [profile, setProfile] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+
+    const fetchProfile = async () => {
+
+      // ✅ get logged in user
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        console.log("No user session");
+        return;
+      }
+
+      // ✅ fetch matching profile
+      const { data, error } =
+        await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", user.id)   // 🔥 match auth id
+          .single();
+
+      if (error) {
+        console.error(error);
+      } else {
+        setProfile(data);
+      }
+
+      setLoading(false);
+    };
+
+    fetchProfile();
+
+  }, []);
+
+  if (loading) return <p>Loading...</p>;
+
   return (
     <div className="p-10 space-y-6">
 
@@ -20,3 +67,4 @@ export default function Dashboard() {
     </div>
   );
 }
+
