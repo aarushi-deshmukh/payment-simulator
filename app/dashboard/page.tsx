@@ -18,7 +18,8 @@ type Payment = {
   sender_id: string;
   receiver_id: string;
   amount: number;
-  status: "created" | "processing" | "success" | "failure";
+  status: "CREATED" | "PROCESSING" | "SUCCESS" | "FAILURE";
+  failure_reason: string | null;
   created_at: string;
 };
 
@@ -41,73 +42,51 @@ const timeAgo = (date: string) => {
 
 const BADGE: Record<string, { bg: string; color: string; border: string }> = {
   SUCCESS:    { bg: "rgba(52,211,153,0.12)",  color: "#34d399", border: "rgba(52,211,153,0.25)"  },
-  FAILED:     { bg: "rgba(248,113,113,0.12)", color: "#f87171", border: "rgba(248,113,113,0.25)" },
+  FAILURE:    { bg: "rgba(248,113,113,0.12)", color: "#f87171", border: "rgba(248,113,113,0.25)" },
   PROCESSING: { bg: "rgba(251,191,36,0.12)",  color: "#fbbf24", border: "rgba(251,191,36,0.25)"  },
   CREATED:    { bg: "rgba(139,92,246,0.12)",  color: "#a78bfa", border: "rgba(139,92,246,0.25)"  },
 };
+
+const normalizeStatus = (s: string): Payment["status"] =>
+  s.toUpperCase().trim() as Payment["status"];
 
 export default function Dashboard() {
   const router = useRouter();
   const [profile, setProfile]   = useState<Profile | null>(null);
   const [payments, setPayments] = useState<Payment[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"all" | "sent" | "received">("all");
-  const [statusFilter, setStatusFilter] = useState<"all" | "processing" | "success" | "failure">("all");
+  const [loading, setLoading]   = useState(true);
+  const [activeTab, setActiveTab]       = useState<"all" | "sent" | "received">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "SUCCESS" | "FAILURE" | "PROCESSING" | "CREATED">("all");
+  const [copiedId, setCopiedId]         = useState<string | null>(null);
 
-  const fetchPayments = async (userId: string) => {
-
-    let query = supabase
-      .from("payments")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(50);
-
-    // ALL TAB
-    if (activeTab === "all") {
-      query = query.or(
-        `sender_id.eq.${userId},receiver_id.eq.${userId}`
-      );
-    }
-
-    // SENT TAB
-    if (activeTab === "sent") {
-      query = query.eq("sender_id", userId);
-    }
-
-    // RECEIVED TAB
-    if (activeTab === "received") {
-      query = query.eq("receiver_id", userId);
-    }
-
-    const { data, error } = await query;
-
-    if (!error) setPayments(data ?? []);
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    router.replace("/signin");
   };
 
-  useEffect(() => {
+  const copyId = (id: string) => {
+    navigator.clipboard.writeText(id);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
 
-  const load = async () => {
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      router.replace("/signin");
-      return;
-    }
-
-    const { data: prof } =
-      await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", user.id)
-        .single();
-
-    setProfile(prof);
-
-    await fetchPayments(user.id);
-
+  const fetchData = async (uid: string) => {
+    const [{ data: prof }, { data: pays }] = await Promise.all([
+      supabase.from("profiles").select("*").eq("id", uid).single(),
+      supabase
+        .from("payments")
+        .select("id, sender_id, receiver_id, amount, status, failure_reason, created_at")
+        .or(`sender_id.eq.${uid},receiver_id.eq.${uid}`)
+        .order("created_at", { ascending: false })
+        .limit(50),
+    ]);
+    if (prof) setProfile(prof);
+    setPayments(
+      (pays ?? []).map(p => ({
+        ...p,
+        status: normalizeStatus(String(p.status)),
+      }))
+    );
     setLoading(false);
   };
 
@@ -130,10 +109,10 @@ useEffect(() => {
   );
 
   const stats = {
-    total: payments.length,
-    completed: payments.filter((p) => p.status === "success").length,
-    pending: payments.filter((p) => p.status === "processing").length,
-    failed: payments.filter((p) => p.status === "failure").length,
+    total:      payments.length,
+    success:    payments.filter(p => p.status === "SUCCESS").length,
+    failed:     payments.filter(p => p.status === "FAILURE").length,
+    processing: payments.filter(p => p.status === "PROCESSING" || p.status === "CREATED").length,
     totalSent: payments
       .filter((p) => p.sender_id === profile?.id && p.status === "success")
       .reduce((a, p) => a + p.amount, 0),
@@ -164,31 +143,16 @@ useEffect(() => {
         *, *::before, *::after { box-sizing: border-box; }
         body { margin: 0; background: #080810 !important; }
         .dash { font-family: 'Syne', sans-serif; min-height: 100vh; background: #080810; color: #e2e2f0; }
-        .grid-bg {
-          position: fixed; inset: 0; pointer-events: none; z-index: 0;
-          background-image: linear-gradient(rgba(139,92,246,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(139,92,246,0.035) 1px, transparent 1px);
-          background-size: 44px 44px;
-        }
+        .grid-bg { position: fixed; inset: 0; pointer-events: none; z-index: 0; background-image: linear-gradient(rgba(139,92,246,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(139,92,246,0.035) 1px, transparent 1px); background-size: 44px 44px; }
         .orb1 { position: fixed; width: 600px; height: 600px; border-radius: 50%; background: radial-gradient(circle, rgba(139,92,246,0.1) 0%, transparent 65%); top: -200px; right: -100px; pointer-events: none; z-index: 0; }
         .orb2 { position: fixed; width: 400px; height: 400px; border-radius: 50%; background: radial-gradient(circle, rgba(6,182,212,0.07) 0%, transparent 65%); bottom: -100px; left: -50px; pointer-events: none; z-index: 0; }
         .content { position: relative; z-index: 1; }
         .main { max-width: 1280px; margin: 0 auto; padding: 32px 24px; display: flex; flex-direction: column; gap: 24px; }
 
-        .profile-card {
-          background: linear-gradient(135deg, rgba(139,92,246,0.18) 0%, rgba(6,182,212,0.09) 100%);
-          border: 1px solid rgba(139,92,246,0.28); border-radius: 22px;
-          padding: 28px 32px; display: flex; align-items: center; justify-content: space-between;
-          flex-wrap: wrap; gap: 20px; position: relative; overflow: hidden;
-        }
+        .profile-card { background: linear-gradient(135deg, rgba(139,92,246,0.18) 0%, rgba(6,182,212,0.09) 100%); border: 1px solid rgba(139,92,246,0.28); border-radius: 22px; padding: 28px 32px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 20px; position: relative; overflow: hidden; }
         .profile-card::before { content: ''; position: absolute; inset: 0; background: linear-gradient(135deg, rgba(139,92,246,0.05), transparent); }
         .profile-left { display: flex; align-items: center; gap: 18px; position: relative; }
-        .avatar {
-          width: 58px; height: 58px; border-radius: 18px;
-          background: linear-gradient(135deg, #8b5cf6, #06b6d4);
-          display: flex; align-items: center; justify-content: center;
-          font-size: 22px; font-weight: 800; color: white; flex-shrink: 0;
-          box-shadow: 0 6px 20px rgba(139,92,246,0.4);
-        }
+        .avatar { width: 58px; height: 58px; border-radius: 18px; background: linear-gradient(135deg, #8b5cf6, #06b6d4); display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 800; color: white; flex-shrink: 0; box-shadow: 0 6px 20px rgba(139,92,246,0.4); }
         .profile-name { font-size: 22px; font-weight: 700; margin: 0 0 5px; }
         .profile-acct { font-size: 13px; color: #71717a; }
         .profile-acct span { color: #a78bfa; font-family: 'JetBrains Mono', monospace; }
@@ -219,15 +183,7 @@ useEffect(() => {
         .tab.active { background: rgba(139,92,246,0.18); color: #c4b5fd; }
         .tab:hover:not(.active) { color: #a1a1aa; }
 
-        .filter-select {
-          font-family: 'Syne', sans-serif; font-size: 12px; font-weight: 600;
-          padding: 7px 30px 7px 12px; border-radius: 9px; cursor: pointer;
-          background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1);
-          color: #a1a1aa; outline: none; transition: border-color 0.2s;
-          appearance: none; -webkit-appearance: none;
-          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
-          background-repeat: no-repeat; background-position: right 10px center;
-        }
+        .filter-select { font-family: 'Syne', sans-serif; font-size: 12px; font-weight: 600; padding: 7px 30px 7px 12px; border-radius: 9px; cursor: pointer; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); color: #a1a1aa; outline: none; transition: border-color 0.2s; appearance: none; -webkit-appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; }
         .filter-select:focus { border-color: rgba(139,92,246,0.4); color: #e2e2f0; }
         .filter-select option { background: #18181b; color: #e2e2f0; }
 
@@ -246,6 +202,7 @@ useEffect(() => {
         .tx-amount-neg { color: #f87171; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
         .badge { display: inline-flex; align-items: center; font-size: 10px; font-weight: 700; padding: 3px 10px; border-radius: 20px; text-transform: uppercase; letter-spacing: 0.5px; border: 1px solid; }
         .empty { text-align: center; padding: 64px; color: #3f3f46; font-size: 14px; }
+        .failure-text { font-size: 11px; color: #f87171; font-family: 'JetBrains Mono', monospace; max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
         .main > * { animation: fadeIn 0.4s ease both; }
@@ -297,8 +254,17 @@ useEffect(() => {
 
       <div className="dash">
         <div className="grid-bg" /><div className="orb1" /><div className="orb2" />
-        <div className="main content">
+        <nav style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 32px", borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(8,8,16,0.8)", backdropFilter: "blur(20px)", position: "sticky", top: 0, zIndex: 50 }} className="content">
+          <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: -0.5, color: "#e2e2f0" }}>Pay<span style={{ color: "#8b5cf6" }}>Sim</span></span>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <span style={{ fontSize: 13, color: "#71717a" }}>{profile?.full_name}</span>
+            <button onClick={handleSignOut} style={{ fontFamily: "'Syne', sans-serif", fontSize: 13, fontWeight: 600, padding: "8px 16px", borderRadius: 8, cursor: "pointer", background: "rgba(239,68,68,0.1)", color: "#f87171", border: "1px solid rgba(239,68,68,0.2)", transition: "all 0.2s" }}>
+              Sign Out
+            </button>
+          </div>
+        </nav>
 
+        <div className="main content">
           {/* Profile */}
           <div className="profile-card">
             <div className="profile-left">
@@ -369,24 +335,13 @@ useEffect(() => {
               <div className="panel-header-left">
                 <span className="panel-title">Transaction History</span>
               </div>
-              <select
-              className="filter-select"
-              value={statusFilter}
-              onChange={(e) =>
-                setStatusFilter(
-                  e.target.value as
-                    | "all"
-                    | "processing"
-                    | "success"
-                    | "failure"
-                )
-              }
-            >
-              <option value="all">All Statuses</option>
-              <option value="processing">⏳ Processing</option>
-              <option value="success">✓ Successful</option>
-              <option value="failure">✕ Failed</option>
-            </select>
+              <select className="filter-select" value={statusFilter} onChange={e => setStatusFilter(e.target.value as typeof statusFilter)}>
+                <option value="all">All Statuses</option>
+                <option value="SUCCESS">✓ Successful</option>
+                <option value="FAILURE">✕ Failed</option>
+                <option value="PROCESSING">⟳ Processing</option>
+                <option value="CREATED">○ Created</option>
+              </select>
             </div>
             <div className="table-wrap">
               {filtered.length === 0 ? (
@@ -394,7 +349,7 @@ useEffect(() => {
               ) : (
                 <table className="tx-table">
                   <thead>
-                    <tr><th>TXN ID</th><th>Direction</th><th>Amount</th><th>Status</th><th>Time</th></tr>
+                    <tr><th>TXN ID</th><th>Direction</th><th>Amount</th><th>Status</th><th>Failure Reason</th><th>Time</th></tr>
                   </thead>
                   <tbody>
                     {filtered.map(p => {
@@ -410,6 +365,12 @@ useEffect(() => {
                           <td><span style={{ fontSize: 12, color: isSent ? "#f87171" : "#34d399", fontWeight: 600 }}>{isSent ? "↑ Sent" : "↓ Received"}</span></td>
                           <td><span className={isSent ? "tx-amount-neg" : "tx-amount-pos"}>{isSent ? "−" : "+"}{fmt(Number(p.amount), profile?.currency ?? "INR")}</span></td>
                           <td><span className="badge" style={{ background: b.bg, color: b.color, borderColor: b.border }}>{p.status}</span></td>
+                          <td>
+                            {p.failure_reason
+                              ? <span className="failure-text" title={p.failure_reason}>{p.failure_reason}</span>
+                              : <span style={{ color: "#3f3f46", fontSize: 11 }}>—</span>
+                            }
+                          </td>
                           <td><span className="tx-time">{timeAgo(p.created_at)}</span></td>
                         </tr>
                       );
@@ -419,7 +380,6 @@ useEffect(() => {
               )}
             </div>
           </div>
-
         </div>
       </div>
     </>
