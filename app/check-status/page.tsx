@@ -18,7 +18,7 @@ const STATUS_CONFIG = {
   CREATED:    { color: "#a78bfa", bg: "rgba(139,92,246,0.1)",  border: "rgba(139,92,246,0.25)",  icon: "○", label: "Created"     },
 };
 
-// ✅ THE FIX: normalize lowercase DB enum → uppercase
+
 const normalizeStatus = (s: string): PaymentResult["status"] =>
   s.toUpperCase().trim() as PaymentResult["status"];
 
@@ -229,7 +229,7 @@ export default function CheckStatusPage() {
                 </div>
               </div>
 
-              {/* ✅ Failure reason shown for FAILED payments */}
+              {/* Failure reason shown for FAILED payments */}
               {result.status === "FAILURE" && (
                 <>
                   <div className="divider" />
